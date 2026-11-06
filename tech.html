@@ -2,6 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ระบบจัดการงานซ่อม (Technician Portal)</title>
   
   <!-- CSS & Fonts -->
@@ -170,9 +171,7 @@
   </div>
 
   <script>
-    // -------------------------------------------------------------
-    // ข้อสำคัญ: นำ Web App URL ของคุณมาวางในบรรทัดด้านล่างนี้
-    // -------------------------------------------------------------
+    // ดึง URL มาจาก index.html ของคุณให้แล้ว
     const API_URL = 'https://script.google.com/macros/s/AKfycbwrnKLsvLf32sUjZw6kiEp7fkn6_yRULQTxEfY2G3Z7G4Jaux3qZ5YJDm7huRmi2iiq8g/exec';
 
     const { createApp } = Vue;
@@ -212,13 +211,14 @@
         }
       },
       methods: {
-        // อัปเดต: ใช้ fetch แทน google.script.run สำหรับหน้า Login (GET Request)
         handleLogin() {
           this.isChecking = true;
-          // ส่ง password ไปตรวจสอบทาง Query Parameter
           fetch(`${API_URL}?action=verifyTech&password=${encodeURIComponent(this.password)}`)
             .then(res => {
-              if (!res.ok) throw new Error("Network response was not ok");
+              const contentType = res.headers.get("content-type");
+              if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("เซิร์ฟเวอร์ไม่ได้ตอบกลับเป็น JSON (อาจจะลืมเพิ่ม API ใน Code.gs หรือลืม Deploy เป็น New Version)");
+              }
               return res.json();
             })
             .then(isValid => {
@@ -228,19 +228,14 @@
                 localStorage.setItem('tech_logged_in', 'true');
                 this.fetchTickets();
               } else {
-                Swal.fire({
-                  icon: 'error',
-                  title: 'รหัสไม่ถูกต้อง',
-                  text: 'กรุณาลองใหม่อีกครั้ง',
-                  confirmButtonColor: '#d33'
-                });
+                Swal.fire({ icon: 'error', title: 'รหัสไม่ถูกต้อง', text: 'กรุณาลองใหม่อีกครั้ง' });
                 this.password = '';
               }
             })
             .catch(error => {
               this.isChecking = false;
-              console.error('Error:', error);
-              Swal.fire('เกิดข้อผิดพลาด', 'ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบ API_URL', 'error');
+              console.error('Login Error:', error);
+              Swal.fire('ข้อผิดพลาดการเชื่อมต่อ', error.message, 'error');
             });
         },
         
@@ -250,26 +245,21 @@
           localStorage.removeItem('tech_logged_in');
         },
         
-        // อัปเดต: ใช้ fetch ดึงข้อมูลงานทั้งหมด (GET Request)
         fetchTickets() {
           this.isLoading = true;
           fetch(`${API_URL}?action=getTickets`)
-            .then(res => {
-              if (!res.ok) throw new Error("Network response was not ok");
-              return res.json();
-            })
+            .then(res => res.json())
             .then(data => {
               this.tickets = data.map(t => ({ ...t, isUpdating: false }));
               this.isLoading = false;
             })
             .catch(error => {
               this.isLoading = false;
-              console.error('Error:', error);
+              console.error('Fetch Error:', error);
               Swal.fire('เกิดข้อผิดพลาด', 'โหลดข้อมูลไม่สำเร็จ', 'error');
             });
         },
         
-        // อัปเดต: ใช้ fetch สำหรับอัปเดตสถานะงาน (POST Request)
         updateStatus(ticket) {
           ticket.isUpdating = true;
           fetch(API_URL, {
@@ -282,65 +272,41 @@
               repairDetails: ticket.repairDetails
             })
           })
-          .then(res => {
-            if (!res.ok || !res.headers.get("content-type")?.includes("application/json")) {
-              throw new Error("Server did not return JSON");
-            }
-            return res.json();
-          })
+          .then(res => res.json())
           .then(res => {
             ticket.isUpdating = false;
             if(res.success) {
-              Swal.fire({
-                icon: 'success',
-                title: 'บันทึกสำเร็จ',
-                text: 'อัปเดตสถานะงานเรียบร้อยแล้ว',
-                toast: true,
-                position: 'top-end',
-                showConfirmButton: false,
-                timer: 2000
-              });
+              Swal.fire({ icon: 'success', title: 'บันทึกสำเร็จ', text: 'อัปเดตสถานะงานเรียบร้อยแล้ว', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
             } else {
               Swal.fire('ข้อผิดพลาด', res.message, 'error');
             }
           })
           .catch(error => {
             ticket.isUpdating = false;
-            console.error('Error:', error);
+            console.error('Update Error:', error);
             Swal.fire('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้', 'error');
           });
         },
         
         viewImage(url) {
-          let directUrl = url;
-          // ใช้ Regex ดึง ID และแปลงเป็น Thumbnail (วิธีที่เสถียรที่สุดสำหรับ Google Drive)
+          let previewUrl = url;
+          
+          // ดึง ID ออกมาเพื่อสร้างลิงก์สำหรับ Preview โดยเฉพาะ (วิธีนี้ Google Drive อนุญาตให้ฝัง Iframe ได้)
           const fileIdMatch = url.match(/[-\w]{25,}/);
           if (fileIdMatch) {
             const fileId = fileIdMatch[0];
-            directUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`; 
+            previewUrl = `https://drive.google.com/file/d/${fileId}/preview`; 
           }
 
+          // แสดงผลด้วย Iframe ใน SweetAlert2
           Swal.fire({
-            imageUrl: directUrl,
-            imageAlt: 'รูปภาพแจ้งซ่อม',
+            html: `<iframe src="${previewUrl}" width="100%" height="450px" style="border: none; border-radius: 8px;"></iframe>`,
             showConfirmButton: false,
             showCloseButton: true,
-            width: 'auto',
-            background: 'transparent',
-            backdrop: `rgba(0,0,0,0.85)`,
-            didOpen: () => {
-              const img = Swal.getImage();
-              if (img) {
-                img.onerror = () => {
-                  Swal.update({
-                    imageUrl: null,
-                    icon: 'error',
-                    title: 'ไม่สามารถโหลดรูปภาพได้',
-                    text: 'กรุณาตรวจสอบสิทธิ์การแชร์โฟลเดอร์ Google Drive'
-                  });
-                };
-              }
-            }
+            width: '80%',
+            padding: '1em',
+            background: '#fff',
+            backdrop: `rgba(0,0,0,0.85)`
           });
         },
         
